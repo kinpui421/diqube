@@ -40,9 +40,14 @@ import org.diqube.config.Config;
 import org.diqube.config.ConfigKey;
 import org.diqube.context.AutoInstatiate;
 import org.diqube.data.TableShard;
+import org.diqube.data.colshard.ColumnShard;
 import org.diqube.execution.ExecutablePlan;
 import org.diqube.execution.ExecutablePlanFromRemoteBuilderFactory;
 import org.diqube.execution.TableRegistry;
+import org.diqube.execution.cache.ColumnShardCacheRegistry;
+import org.diqube.execution.cache.WritableColumnShardCache;
+import org.diqube.execution.env.ExecutionEnvironment;
+import org.diqube.execution.env.querystats.QueryableColumnShard;
 import org.diqube.function.IntermediaryResult;
 import org.diqube.queries.QueryRegistry;
 import org.diqube.queries.QueryRegistry.QueryExceptionHandler;
@@ -72,6 +77,8 @@ import org.diqube.util.Holder;
 import org.diqube.util.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.collect.Iterables;
 
 /**
  * Implements {@link ClusterQueryService}, which is the cluster-side API to distribute the execution of queries.
@@ -114,6 +121,9 @@ public class ClusterQueryServiceHandler implements ClusterQueryService.Iface {
 
   @Inject
   private ClusterManager clusterManager;
+
+  @Inject
+  private ColumnShardCacheRegistry tableCacheRegistry;
 
   @Config(ConfigKey.CONCURRENT_TABLE_SHARD_EXECUTION_PER_QUERY)
   private int numberOfTableShardsToExecuteConcurrently;
@@ -253,12 +263,33 @@ public class ClusterQueryServiceHandler implements ClusterQueryService.Iface {
                 logger.error("Could not send statistics to client for query {}", queryUuid, e);
               }
 
+            }
+
+            // update table cache with the results of this query execution. Note that if this query execution loaded
+            // specific columns from the cache, they will be available in the ExecutionEnv as "temporary columns" - and
+            // we will present them to the cache again right away. With this mechanism the cache can actively count the
+            // usages of specific columns and therefore tune what it should cache and what not.
+            WritableColumnShardCache tableCache = tableCacheRegistry.getColumnShardCache(executionPlan.getTable());
+            if (tableCache != null) {
+              logger.info("Updating the table cache with results of query {}, execution {}", queryUuid, executionUuid);
+              for (ExecutablePlan plan : executablePlansHolder.getValue()) {
+                ExecutionEnvironment env = plan.getDefaultExecutionEnvironment();
+                Map<String, List<QueryableColumnShard>> tempColShards = env.getAllTemporaryColumnShards();
+                for (String colName : tempColShards.keySet()) {
+                  ColumnShard tempCol = Iterables.getLast(tempColShards.get(colName)).getDelegate();
+                  tableCache.registerUsageOfColumnShardPossiblyCache(env.getFirstRowIdInShard(), tempCol);
+                }
+              }
+            }
+
+            synchronized (connSync) {
               try {
                 resultService.executionDone(remoteQueryUuid);
               } catch (TException e) {
                 logger.error("Could not send 'done' to client for query {}", queryUuid, e);
               }
             }
+
             exceptionHandler.handleException(null);
           }
         });
@@ -282,14 +313,13 @@ public class ClusterQueryServiceHandler implements ClusterQueryService.Iface {
     executablePlansHolder.setValue(prepareRes.getRight());
 
     // prepare to launch the execution in a different Thread
-    Executor threadPool = executorManager.newQueryFixedThreadPoolWithTimeout(1, "query-remote-master-" + queryUuid + "-%d",
-        queryUuid, executionUuid);
-    queryRegistry.registerQueryExecution(queryUuid, executionUuid, exceptionHandler);
+    Executor threadPool = executorManager.newQueryFixedThreadPoolWithTimeout(1,
+        "query-remote-master-" + queryUuid + "-%d", queryUuid, executionUuid);
+    queryRegistry.registerQueryExecution(queryUuid, executionUuid, exceptionHandler, false);
 
     // start execution of ExecutablePlan(s) asynchronously.
     queryRegistry.getOrCreateStatsManager(queryUuid, executionUuid).setStartedNanos(System.nanoTime());
     threadPool.execute(prepareRes.getLeft());
-
   }
 
   /**

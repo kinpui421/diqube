@@ -23,6 +23,7 @@ package org.diqube.execution.steps;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -127,9 +128,14 @@ public class GroupStep extends AbstractThreadedExecutablePlanStep {
     super(stepId, queryRegistry);
     this.defaultEnv = env;
     this.colNamesToGroupBy = colNamesToGroupBy;
+  }
 
+  @Override
+  public void initialize() {
     columnsThatNeedToBeBuilt = new ConcurrentSkipListSet<>(colNamesToGroupBy);
-    columnsThatNeedToBeBuilt.removeAll(env.getAllColumnShards().keySet());
+    for (Iterator<String> it = columnsThatNeedToBeBuilt.iterator(); it.hasNext();)
+      if (defaultEnv.getColumnShard(it.next()) != null)
+        it.remove();
   }
 
   /**

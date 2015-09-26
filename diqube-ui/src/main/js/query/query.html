@@ -26,7 +26,8 @@
 
 <p><textarea ng-model="query.diql" rows="6" class="diql-full"> </textarea></p>
 <div class="execute-buttons">
-  <button class="btn btn-primary" ng-click="query.execute()">Execute</button>
+  <button class="btn btn-primary" ng-click="query.execute()" ng-disabled="query.isExecuting">Execute</button>
+  <button class="btn btn-primary" ng-click="query.cancel()" ng-disabled="!query.isExecuting">Cancel</button>
 
   <div class="btn-toolbar pull-right"  style="{{ query.stats ? '' : 'display: none'}}">
     <div class="btn-group">
@@ -36,7 +37,7 @@
   </div>
 </div>
 
-<div style="{{ query.result ? '' : 'display: none'}}">
+<div style="{{ query.displayResultsOrStats ? '' : 'display: none'}}">
   <div class="progress">
     <div class="progress-bar" style="min-width: 2em; width: {{query.result.percentComplete}}%;">{{query.result.percentComplete}}%</div>
   </div>
@@ -72,12 +73,16 @@
         <td ng-repeat="val in query.stats.numberOfThreads track by $index">{{val}}</td>
       </tr>    
       <tr>
-        <td colspan="2">numberOfTemporaryColumnsCreated</td>
-        <td ng-repeat="val in query.stats.numberOfTemporaryColumnsCreated track by $index">{{val}}</td>
+        <td colspan="2">numberOfTemporaryColumnShardsCreated</td>
+        <td ng-repeat="val in query.stats.numberOfTemporaryColumnShardsCreated track by $index">{{val}}</td>
       </tr>    
       <tr>
-        <td colspan="2">numberOfPages</td>
-        <td ng-repeat="val in query.stats.numberOfPages track by $index">{{val}}</td>
+        <td colspan="2">numberOfTemporaryColumnShardsFromCache</td>
+        <td ng-repeat="val in query.stats.numberOfTemporaryColumnShardsFromCache track by $index">{{val}}</td>
+      </tr>    
+      <tr>
+        <td colspan="2">numberOfPagesInTable</td>
+        <td ng-repeat="val in query.stats.numberOfPagesInTable track by $index">{{val}}</td>
       </tr>    
       <tr>
         <td colspan="2">numberOfTemporaryPages</td>

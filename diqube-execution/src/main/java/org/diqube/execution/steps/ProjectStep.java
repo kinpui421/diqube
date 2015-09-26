@@ -23,6 +23,7 @@ package org.diqube.execution.steps;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListSet;
@@ -159,8 +160,8 @@ public class ProjectStep extends AbstractThreadedExecutablePlanStep {
 
   private Function<ColumnType, ColumnShardBuilderManager> columnShardBuilderManagerSupplier;
   private ColumnVersionManager columnVersionManager;
-
   private ColumnShardFactory columnShardFactory;
+  private ColumnShardBuilderFactory columnShardBuilderFactory;
 
   /**
    * @param functionNameLowerCase
@@ -185,16 +186,22 @@ public class ProjectStep extends AbstractThreadedExecutablePlanStep {
     this.functionNameLowerCase = functionNameLowerCase;
     this.functionParameters = functionParameters;
     this.outputColName = outputColName;
+    this.columnShardBuilderFactory = columnShardBuilderFactory;
     this.columnShardFactory = columnShardFactory;
     this.columnVersionManager = columnVersionManager;
+  }
 
+  @Override
+  public void initialize() {
     inputColNames = new HashSet<>();
     for (ColumnOrValue param : functionParameters)
       if (param.getType().equals(ColumnOrValue.Type.COLUMN))
         inputColNames.add(param.getColumnName());
 
     columnsThatStillNeedToBeBuilt = new ConcurrentSkipListSet<>(inputColNames);
-    columnsThatStillNeedToBeBuilt.removeAll(defaultEnv.getAllColumnShards().keySet());
+    for (Iterator<String> it = columnsThatStillNeedToBeBuilt.iterator(); it.hasNext();)
+      if (defaultEnv.getColumnShard(it.next()) != null)
+        it.remove();
 
     columnShardBuilderManagerSupplier = (outputColType) -> {
       LoaderColumnInfo columnInfo = new LoaderColumnInfo(outputColType);

@@ -44,6 +44,7 @@ import org.diqube.execution.env.ExecutionEnvironmentFactory;
 import org.diqube.execution.exception.ExecutablePlanBuildException;
 import org.diqube.execution.steps.GroupIntermediaryAggregationStep;
 import org.diqube.execution.steps.ResolveValuesStep;
+import org.diqube.queries.QueryUuid.QueryUuidThreadState;
 import org.diqube.remote.cluster.thrift.RExecutionPlan;
 import org.diqube.remote.cluster.thrift.RExecutionPlanStep;
 import org.diqube.remote.cluster.thrift.RExecutionPlanStepDataType;
@@ -113,6 +114,10 @@ public class ExecutablePlanFromRemoteBuilder {
 
   /**
    * Build the {@link ExecutablePlan}s, for each {@link TableShard} that is available on this node one.
+   * 
+   * <p>
+   * This method must be executed with correct {@link QueryUuidThreadState} set, as
+   * {@link RemoteExecutionPlanOptimizer} needs correct thread state!
    */
   public List<ExecutablePlan> build() throws ExecutablePlanBuildException {
     Table table = tableRegistry.getTable(plan.getTable());
@@ -125,16 +130,21 @@ public class ExecutablePlanFromRemoteBuilder {
     for (TableShard tableShard : table.getShards()) {
       ExecutionEnvironment defaultEnv = executionEnvironmentFactory.createQueryRemoteExecutionEnvironment(tableShard);
       Map<Integer, ExecutablePlanStep> steps = new HashMap<>();
+      Map<Integer, RExecutionPlanStep> remoteSteps = new HashMap<>();
 
-      for (RExecutionPlanStep remoteStep : plan.getSteps()) {
+      // note that the following optimization might already put some columns in the Env (from the ColumnShardCache).
+      RExecutionPlan optimizedRemotePlan = new RemoteExecutionPlanOptimizer().optimize(defaultEnv, plan);
+
+      for (RExecutionPlanStep remoteStep : optimizedRemotePlan.getSteps()) {
         ExecutablePlanStep newStep = executablePlanStepFactory.createExecutableStep(defaultEnv, remoteStep);
         steps.put(remoteStep.getStepId(), newStep);
+        remoteSteps.put(remoteStep.getStepId(), remoteStep);
       }
 
       // Wire the data flow.
       for (Entry<Integer, ExecutablePlanStep> stepEntry : steps.entrySet()) {
         ExecutablePlanStep sourceStep = stepEntry.getValue();
-        RExecutionPlanStep remoteStep = plan.getSteps().get(sourceStep.getStepId());
+        RExecutionPlanStep remoteStep = remoteSteps.get(sourceStep.getStepId());
 
         // Use the data flow specifications from the RExecutionPlan.
         if (remoteStep.getProvideDataForStepsSize() > 0) {
@@ -163,7 +173,7 @@ public class ExecutablePlanFromRemoteBuilder {
           sourceStep.addOutputConsumer(groupIntermediaryAggregationConsumer);
       }
 
-      ExecutablePlanInfo info = createExecutablePlanInfo(plan);
+      ExecutablePlanInfo info = createExecutablePlanInfo(optimizedRemotePlan);
       ExecutablePlan executablePlan =
           executablePlanFactory.createExecutablePlan(defaultEnv, new ArrayList<>(steps.values()), info,
               null /* no col version manager on remote as there are no colversions used here */);

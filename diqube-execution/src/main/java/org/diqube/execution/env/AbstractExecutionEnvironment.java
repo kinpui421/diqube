@@ -21,7 +21,6 @@
 package org.diqube.execution.env;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -126,19 +125,31 @@ public abstract class AbstractExecutionEnvironment implements ExecutionEnvironme
 
   @Override
   public void storeTemporaryLongColumnShard(LongColumnShard column) {
-    queryRegistry.getOrCreateCurrentStatsManager().incNumberOfTemporaryColumnsCreated();
+    queryRegistry.getOrCreateCurrentStatsManager().incNumberOfTemporaryColumnShardsCreated();
+    internalStoreTemporaryLongColumnShard(column);
+  }
+
+  protected void internalStoreTemporaryLongColumnShard(LongColumnShard column) {
     tempLongColumns.put(column.getName(), new QueryableLongColumnShardFacade(column, true, queryRegistry));
   }
 
   @Override
   public void storeTemporaryStringColumnShard(StringColumnShard column) {
-    queryRegistry.getOrCreateCurrentStatsManager().incNumberOfTemporaryColumnsCreated();
+    queryRegistry.getOrCreateCurrentStatsManager().incNumberOfTemporaryColumnShardsCreated();
+    internalStoreTemporaryStringColumnShard(column);
+  }
+
+  protected void internalStoreTemporaryStringColumnShard(StringColumnShard column) {
     tempStringColumns.put(column.getName(), new QueryableStringColumnShardFacade(column, true, queryRegistry));
   }
 
   @Override
   public void storeTemporaryDoubleColumnShard(DoubleColumnShard column) {
-    queryRegistry.getOrCreateCurrentStatsManager().incNumberOfTemporaryColumnsCreated();
+    queryRegistry.getOrCreateCurrentStatsManager().incNumberOfTemporaryColumnShardsCreated();
+    internalStoreTemporaryDoubleColumnShard(column);
+  }
+
+  protected void internalStoreTemporaryDoubleColumnShard(DoubleColumnShard column) {
     tempDoubleColumns.put(column.getName(), new QueryableDoubleColumnShardFacade(column, true, queryRegistry));
   }
 
@@ -173,18 +184,6 @@ public abstract class AbstractExecutionEnvironment implements ExecutionEnvironme
 
     return null;
   }
-
-  @Override
-  public Map<String, QueryableColumnShard> getAllColumnShards() {
-    Map<String, QueryableColumnShard> res = new HashMap<>(delegateGetAllColumnShards());
-    // temp cols stored in this EE override any delegate information.
-    res.putAll(tempDoubleColumns);
-    res.putAll(tempStringColumns);
-    res.putAll(tempLongColumns);
-    return res;
-  }
-
-  abstract protected Map<String, QueryableColumnShard> delegateGetAllColumnShards();
 
   protected Set<String> getAllColumnNamesDefinedInThisEnv() {
     Set<String> res = new HashSet<>();

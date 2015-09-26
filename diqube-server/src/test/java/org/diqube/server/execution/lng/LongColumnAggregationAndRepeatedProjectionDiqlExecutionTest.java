@@ -20,17 +20,27 @@
  */
 package org.diqube.server.execution.lng;
 
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
 
 import org.diqube.data.ColumnType;
 import org.diqube.execution.ExecutablePlan;
+import org.diqube.execution.cache.ColumnShardCacheRegistry;
+import org.diqube.execution.cache.DefaultColumnShardCache;
+import org.diqube.execution.cache.DefaultColumnShardCacheTestUtil;
 import org.diqube.loader.LoadException;
 import org.diqube.plan.exception.ValidationException;
-import org.diqube.server.execution.AbstractDiqlExecutionTest;
+import org.diqube.server.execution.AbstractCacheDoubleDiqlExecutionTest;
+import org.diqube.server.execution.CacheDoubleTestUtil.IgnoreInCacheDoubleTestUtil;
+import org.diqube.util.DoubleUtil;
 import org.diqube.util.Pair;
 import org.testng.Assert;
 import org.testng.annotations.Test;
@@ -46,7 +56,8 @@ import com.google.common.collect.Iterables;
  *
  * @author Bastian Gloeckle
  */
-public class LongColumnAggregationAndRepeatedProjectionDiqlExecutionTest extends AbstractDiqlExecutionTest<Long> {
+public class LongColumnAggregationAndRepeatedProjectionDiqlExecutionTest
+    extends AbstractCacheDoubleDiqlExecutionTest<Long> {
   public LongColumnAggregationAndRepeatedProjectionDiqlExecutionTest() {
     super(ColumnType.LONG, new LongTestDataProvider());
   }
@@ -788,4 +799,79 @@ public class LongColumnAggregationAndRepeatedProjectionDiqlExecutionTest extends
       executor.shutdownNow();
     }
   }
+
+  @Test
+  @IgnoreInCacheDoubleTestUtil
+  public void colAggregationCachedProjectionNotExecuted()
+      throws LoadException, InterruptedException, ExecutionException {
+    initializeFromJson( //
+        "[ { \"a\": 1, \"b\": 5 },"//
+            + "{ \"a\": 2, \"b\": 6 } " //
+            + " ]");
+    ExecutablePlan plan = buildExecutablePlan("select a, sub(add(b, 1), 1) from " + TABLE);
+
+    ExecutorService executor = executors.newTestExecutor(plan.preferredExecutorServiceSize());
+    try {
+      Future<?> future = plan.executeAsynchronously(executor);
+      future.get();
+    } finally {
+      executor.shutdownNow();
+    }
+
+    ColumnShardCacheRegistry cacheReg = dataContext.getBean(ColumnShardCacheRegistry.class);
+    DefaultColumnShardCache cache = (DefaultColumnShardCache) cacheReg.getColumnShardCache(TABLE);
+    Collection<String> cachedShards =
+        cache.getAllCachedColumnShards(0L).stream().map(shard -> shard.getName()).collect(Collectors.toList());
+
+    String innerColName = functionBasedColumnNameBuilderFactory.create().withFunctionName("add")
+        .addParameterColumnName("b").addParameterLiteralLong(1).build();
+    String outerColName = functionBasedColumnNameBuilderFactory.create().withFunctionName("sub")
+        .addParameterColumnName(innerColName).addParameterLiteralLong(1).build();
+
+    Assert.assertEquals(new HashSet<>(cachedShards), new HashSet<>(Arrays.asList(innerColName, outerColName)),
+        "Expected to have correct columns in cache after executing query for the first time");
+
+    // remove the inner column from the cache
+    DefaultColumnShardCacheTestUtil.removeFromCache(cache, 0L, innerColName);
+
+    // now execute a second time
+    executor = executors.newTestExecutor(plan.preferredExecutorServiceSize());
+    try {
+      Future<?> future = plan.executeAsynchronously(executor);
+      future.get();
+
+      Assert.assertTrue(columnValueConsumerIsDone, "Source should have reported 'done'");
+      Assert.assertTrue(future.isDone(), "Future should report done");
+      Assert.assertFalse(future.isCancelled(), "Future should not report cancelled");
+
+      Assert.assertTrue(resultValues.containsKey("a"), "Expected to have a result for col");
+      Assert.assertTrue(resultValues.containsKey(outerColName), "Expected that there's results for the output func");
+      Assert.assertEquals(resultValues.keySet().size(), 2, "Expected to have results for correct number of cols");
+
+      Assert.assertEquals(resultValues.get("a").size(), 2, "Expected to receive a specific amout of rows");
+      Assert.assertEquals(resultValues.get(outerColName).size(), 2, "Expected to receive a specific amout of rows");
+
+      Map<Long, Long> expected = new HashMap<>();
+      expected.put(1L, 5L);
+      expected.put(2L, 6L);
+
+      for (long rowId : resultValues.get("a").keySet()) {
+        Long valueColA = resultValues.get("a").get(rowId);
+        Long valueFn = resultValues.get(outerColName).get(rowId);
+
+        Assert.assertTrue(DoubleUtil.equals(valueFn, expected.get(valueColA)),
+            "Expected correct result for colA value '" + valueColA + "'. Expected: " + expected.get(valueColA)
+                + " but was: " + valueFn);
+      }
+
+      // we expect to NOT have something in the cache for the innerColumn, as we (1) removed it and (2) the second
+      // execution should not have executed that step.
+      Assert.assertNull(cache.getCachedColumnShard(0L, innerColName),
+          "Expected to have NOT have executed the calculation of the unneeded column");
+    } finally {
+      executor.shutdownNow();
+    }
+
+  }
+
 }
